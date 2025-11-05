@@ -24,23 +24,37 @@
 /// Tasks are guaranteed to begin _and end_ executing in the order in which they are enqueued.
 /// Asynchronous tasks sent to this queue work as they would in a `DispatchQueue` type. Attempting to `enqueueAndWait` this queue from a task executing on this queue will result in a deadlock.
 public final class FIFOQueue: Sendable {
-	// MARK: Initialization
+	// MARK: - Initialization
 
 	/// Instantiates a FIFO queue.
-	/// - Parameter priority: The baseline priority of the tasks added to the asynchronous queue.
-	public init(priority: TaskPriority? = nil) {
-		let (taskStream, taskStreamContinuation) = AsyncStream<FIFOTask>.makeStream()
-		self.taskStreamContinuation = taskStreamContinuation
+	/// - Parameters:
+	///   - priority: Baseline priority for the worker tasks.
+	///   - concurrency: Number of concurrent workers (>= 1).
+	public init(
+		priority: TaskPriority? = nil,
+		concurrency: Int = 1
+	) {
+		let (taskStream, continuation) = AsyncStream<FIFOTask>.makeStream()
+		self.taskStreamContinuation = continuation
 
-		Task.detached(priority: priority) {
-			for await fifoTask in taskStream {
-				await fifoTask.task()
+		// Spin up N workers that consume the stream in submission order.
+		var workers: [Task<Void, Never>] = []
+		for _ in 0..<max(1, concurrency) {
+			let worker = Task.detached(priority: priority) {
+				for await fifoTask in taskStream {
+					await fifoTask.task()
+				}
 			}
+			workers.append(worker)
 		}
+		self.workers = workers
 	}
 
 	deinit {
+		// Close the stream so workers naturally finish their loops.
 		taskStreamContinuation.finish()
+		// Optionally cancel to hasten teardown if a worker is blocked awaiting next item.
+		workers.forEach { $0.cancel() }
 	}
 
 	// MARK: Fileprivate
@@ -54,6 +68,7 @@ public final class FIFOQueue: Sendable {
 	}
 
 	fileprivate let taskStreamContinuation: AsyncStream<FIFOTask>.Continuation
+	fileprivate let workers: [Task<Void, Never>]
 }
 
 extension Task {

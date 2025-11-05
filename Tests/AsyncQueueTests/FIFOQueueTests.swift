@@ -34,6 +34,7 @@ struct FIFOQueueTests {
 		for iteration in 1...1_000 {
 			Task(on: systemUnderTest) {
 				await counter.incrementAndExpectCount(equals: iteration)
+//				await print(counter.count)
 			}
 		}
 		await Task(on: systemUnderTest) { /* Drain the queue */ }.value
